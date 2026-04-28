@@ -91,7 +91,7 @@ if uploaded_file is not None:
 
         # --- 탭 3: 부진조회 ---
         with tab3:
-            st.subheader("부진 재고 (유효일자 6개월 이하)")
+            st.subheader("부진 재고 (유효일자 1년 6개월 이하)")
             # 오늘 기준 6개월(183일) 이하 남은 가용재고 추출
             six_months_later = datetime.now() + timedelta(days=548)
             slow_moving = master_df[(master_df['가용재고'] > 0) & (master_df['유효일자_dt'] <= six_months_later)]
