@@ -4,13 +4,11 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="SCM 재고관리 시스템", layout="wide")
 
-# 유효일자 하이라이트 함수
 def highlight_expiry(val):
     try:
         if pd.isna(val) or val == "" or val == -1:
             return ''
         expiry_date = pd.to_datetime(val)
-        # 오늘 기준 1년 6개월(548일) 이하인 경우
         if expiry_date <= datetime.now() + timedelta(days=548):
             return 'color: red; font-weight: bold'
     except:
@@ -23,29 +21,33 @@ uploaded_file = st.file_uploader("3PL 엑셀 파일(.xlsx)을 업로드하세요
 
 if uploaded_file is not None:
     try:
-        # 엑셀 로드
         df = pd.read_excel(uploaded_file)
-        
-        # 1번 행(단위행) 제외 및 실제 데이터 시작
         raw_data = df.drop(0).reset_index(drop=True)
 
-        # [필수 고정 순서 및 검색용 컬럼 추출]
-        # D(3):상품코드, E(4):상품명, G(6):화주LOT, N(13):유효일자, C(2):셀, F(5):상품(3PL코드), AB(27):가용(환산), AE(30):불량(환산), AI(34):상품바코드
+        # 컬럼 추출 및 명칭 고정
         master_df = raw_data.iloc[:, [3, 4, 6, 13, 2, 5, 27, 30, 34]].copy()
-        
-        # 컬럼명 변경 (F열 -> 웰로스코드)
         master_df.columns = ['상품코드(D)', '상품명', '화주LOT', '유효일자', '셀', '웰로스코드', '가용재고', '불량재고', '상품바코드']
 
-        # [데이터 클렌징]
-        # 1. 유효일자: 시간 제거하고 날짜만 남기기 (에러 데이터는 유지)
-        master_df['유효일자'] = pd.to_datetime(master_df['유효일자'], errors='coerce').dt.date.fillna(master_df['유효일자'])
+        # [데이터 클렌징 강화]
+        # 1. 유효일자: 시간 제거
+        master_df['유효일자'] = pd.to_datetime(master_df['유효일자'], errors='coerce').dt.date
 
-        # 2. 바코드 및 코드류: 문자열로 변환 (검색 최적화)
-        search_cols = ['상품코드(D)', '웰로스코드', '상품명', '상품바코드']
-        for col in search_cols:
-            master_df[col] = master_df[col].astype(str).str.strip()
+        # 2. 바코드 검색 최적화 (가장 중요)
+        # 지수 형태(E+) 방지를 위해 숫자를 문자열로 변환 후 소수점 제거
+        def clean_barcode(val):
+            if pd.isna(val): return ""
+            try:
+                # 숫자형태인 경우 소수점 제거 후 문자열화
+                return str(int(float(val))).strip()
+            except:
+                return str(val).strip()
 
-        # 3. 재고수량: 숫자 형변환
+        master_df['상품바코드'] = master_df['상품바코드'].apply(clean_barcode)
+        master_df['상품코드(D)'] = master_df['상품코드(D)'].astype(str).str.strip()
+        master_df['웰로스코드'] = master_df['웰로스코드'].astype(str).str.strip()
+        master_df['상품명'] = master_df['상품명'].astype(str).str.strip()
+
+        # 3. 재고수량 숫자화
         master_df['가용재고'] = pd.to_numeric(master_df['가용재고'], errors='coerce').fillna(0).astype(int)
         master_df['불량재고'] = pd.to_numeric(master_df['불량재고'], errors='coerce').fillna(0).astype(int)
 
@@ -53,25 +55,22 @@ if uploaded_file is not None:
 
         with tab1:
             st.subheader("정상 판매 가능 재고 (AB열 기준)")
-            search_val = st.text_input("🔍 검색 (ME코드 / 웰로스코드 / 상품명 / 바코드)", key="search_normal").strip()
+            search_input = st.text_input("🔍 검색 (ME코드 / 웰로스코드 / 상품명 / 바코드)", key="search_normal").strip()
             
-            if search_val:
-                # 통합 검색 로직 (문자열 포함 여부 확인)
-                filtered = master_df[
-                    master_df['상품코드(D)'].str.contains(search_val, case=False) |
-                    master_df['웰로스코드'].str.contains(search_val, case=False) |
-                    master_df['상품명'].str.contains(search_val, case=False) |
-                    master_df['상품바코드'].str.contains(search_val)
-                ]
-                
+            if search_input:
+                # 검색어가 포함된 모든 행 찾기
+                mask = (
+                    master_df['상품코드(D)'].str.contains(search_input, case=False, na=False) |
+                    master_df['웰로스코드'].str.contains(search_input, case=False, na=False) |
+                    master_df['상품명'].str.contains(search_input, case=False, na=False) |
+                    master_df['상품바코드'].str.contains(search_input, na=False)
+                )
+                filtered = master_df[mask]
                 available_only = filtered[filtered['가용재고'] > 0]
                 
                 if not available_only.empty:
                     st.metric("총 가용재고 합계", f"{available_only['가용재고'].sum():,} EA")
-                    
-                    # [순서 고정] 상품코드(D), 상품명, 화주LOT, 유효일자, 셀, 웰로스코드, 가용재고
                     display_cols = ['상품코드(D)', '상품명', '화주LOT', '유효일자', '셀', '웰로스코드', '가용재고']
-                    
                     st.dataframe(
                         available_only[display_cols].style.map(highlight_expiry, subset=['유효일자']),
                         use_container_width=True, hide_index=True
@@ -81,24 +80,21 @@ if uploaded_file is not None:
 
         with tab2:
             st.subheader("불량 및 출고 불가 재고 (AE열 기준)")
-            search_val_bad = st.text_input("🔍 검색 (ME코드 / 웰로스코드 / 상품명 / 바코드)", key="search_bad").strip()
+            search_input_bad = st.text_input("🔍 검색 (ME코드 / 웰로스코드 / 상품명 / 바코드)", key="search_bad").strip()
             
-            if search_val_bad:
-                filtered_bad = master_df[
-                    master_df['상품코드(D)'].str.contains(search_val_bad, case=False) |
-                    master_df['웰로스코드'].str.contains(search_val_bad, case=False) |
-                    master_df['상품명'].str.contains(search_val_bad, case=False) |
-                    master_df['상품바코드'].str.contains(search_val_bad)
-                ]
-                
+            if search_input_bad:
+                mask_bad = (
+                    master_df['상품코드(D)'].str.contains(search_input_bad, case=False, na=False) |
+                    master_df['웰로스코드'].str.contains(search_input_bad, case=False, na=False) |
+                    master_df['상품명'].str.contains(search_input_bad, case=False, na=False) |
+                    master_df['상품바코드'].str.contains(search_input_bad, na=False)
+                )
+                filtered_bad = master_df[mask_bad]
                 bad_only = filtered_bad[filtered_bad['불량재고'] > 0]
                 
                 if not bad_only.empty:
                     st.metric("총 불량재고 합계", f"{bad_only['불량재고'].sum():,} EA", delta_color="inverse")
-                    
-                    # [순서 고정] 가용재고 대신 불량재고 표시
                     display_cols_bad = ['상품코드(D)', '상품명', '화주LOT', '유효일자', '셀', '웰로스코드', '불량재고']
-                    
                     st.dataframe(
                         bad_only[display_cols_bad].style.map(highlight_expiry, subset=['유효일자']),
                         use_container_width=True, hide_index=True
