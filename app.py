@@ -53,7 +53,7 @@ if uploaded_file is not None:
         master_df['불량재고'] = pd.to_numeric(master_df['불량재고'], errors='coerce').fillna(0).astype(int)
 
         # 탭 구성 (부진조회 추가)
-        tab1, tab2, tab3 = st.tabs(["✅ 가용재고", "⚠️ 불량재고", "📉 부진조회"])
+        tab1, tab2, tab3 = st.tabs(["✅ 가용재고", "⚠️ 불량재고", "📉 부진재고조회"])
 
         # 검색 공통 함수
         def search_data(df_input, query):
@@ -93,7 +93,7 @@ if uploaded_file is not None:
         with tab3:
             st.subheader("부진 재고 (유효일자 6개월 이하)")
             # 오늘 기준 6개월(183일) 이하 남은 가용재고 추출
-            six_months_later = datetime.now() + timedelta(days=183)
+            six_months_later = datetime.now() + timedelta(days=548)
             slow_moving = master_df[(master_df['가용재고'] > 0) & (master_df['유효일자_dt'] <= six_months_later)]
             
             if not slow_moving.empty:
