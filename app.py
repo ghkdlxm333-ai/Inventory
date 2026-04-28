@@ -1,67 +1,100 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="SCM 재고관리 마스터", layout="wide")
+st.set_page_config(page_title="SCM 재고관리 시스템", layout="wide")
 
-st.title("📦 3PL 엑셀 전용 재고 조회 시스템")
-st.markdown("3PL에서 다운로드한 **.xlsx** 파일을 수정 없이 그대로 업로드하세요.")
+# 스타일 설정 (빨간색 글자 등)
+def highlight_expiry(val):
+    try:
+        expiry_date = pd.to_datetime(val)
+        if expiry_date <= datetime.now() + timedelta(days=548): # 1.5년(약 548일)
+            return 'color: red; font-weight: bold'
+    except:
+        pass
+    return ''
 
-# 1. 파일 업로드 (엑셀 파일 전용으로 설정)
-uploaded_file = st.file_uploader("3PL 엑셀 파일(.xlsx)을 선택하세요", type=['xlsx'])
+st.title("📦 3PL 통합 재고 관리 시스템")
+
+# 1. 파일 업로드
+uploaded_file = st.file_uploader("3PL 엑셀 파일(.xlsx)을 업로드하세요", type=['xlsx'])
 
 if uploaded_file is not None:
     try:
-        # 엑셀 파일 읽기 (헤더가 2줄이므로 header=[0,1]로 설정하여 구조 파악)
-        # 만약 컬럼 위치가 고정적이라면 속도를 위해 정밀하게 인덱스로 접근합니다.
+        # 엑셀 로드 및 전처리
         df = pd.read_excel(uploaded_file)
+        # 1번 행(단위행) 제외 및 필요한 열 인덱스로 추출
+        # D(3), E(4), F(5), G(6), C(2), N(13), AB(27), AE(30), AF(31), AI(34)
+        raw_data = df.drop(0).reset_index(drop=True)
 
-        # 엑셀 시트의 컬럼 위치(Index)를 기준으로 데이터 추출
-        # D(3):상품코드, E(4):상품명, AB(27):가용(정상-환산), AE(30):불량(환산), AF(31):합계
-        inventory_df = df.iloc[:, [3, 4, 27, 30, 31]].copy()
-        
-        # 1번 행(단위 행)은 데이터가 아니므로 제외
-        inventory_df = inventory_df.drop(0).reset_index(drop=True)
-        
-        # 컬럼명 명확히 지정
-        inventory_df.columns = ['상품코드', '상품명', '가용재고', '불량재고', '총합계']
-        
-        # 숫자 데이터 형식 변환 (문자열 섞임 방지)
+        # 데이터 재구성 (요청하신 고정 순서 및 검색용 데이터 포함)
+        # 고정 순서: D열(ME코드), 상품명, 화주LOT(G), 유효일자(N), 셀(C), F열(3PL코드), 가용재고환산(AB)
+        master_df = raw_data.iloc[:, [3, 4, 6, 13, 2, 5, 27, 30, 31, 34]].copy()
+        master_df.columns = ['상품코드(D)', '상품명', '화주LOT', '유효일자', '셀', '상품코드(F)', '가용재고', '불량재고', '총합계', '상품바코드']
+
+        # 숫자 형변환
         for col in ['가용재고', '불량재고', '총합계']:
-            inventory_df[col] = pd.to_numeric(inventory_df[col], errors='coerce').fillna(0).astype(int)
+            master_df[col] = pd.to_numeric(master_df[col], errors='coerce').fillna(0).astype(int)
 
-        # 2. 검색창
-        search_code = st.text_input("🔍 조회할 상품코드(D열)를 입력하세요", "")
+        # 탭 구성: 가용재고 vs 불량재고
+        tab1, tab2 = st.tabs(["✅ 가용재고 조회", "⚠️ 불량/출고불가 조회"])
 
-        if search_code:
-            # 대소문자 구분 없이 코드 검색
-            result = inventory_df[inventory_df['상품코드'].astype(str).str.contains(search_code, case=False)]
+        with tab1:
+            st.subheader("정상 판매 가능 재고")
+            search_val = st.text_input("🔍 검색 (ME코드 / 3PL코드 / 상품명 / 바코드)", key="search_normal")
             
-            if not result.empty:
-                # 동일 코드 합산 처리
-                total_data = result.groupby(['상품코드', '상품명']).sum().reset_index()
-                item = total_data.iloc[0]
-
-                st.divider()
-                st.subheader(f"📍 {item['상품명']}")
+            if search_val:
+                # 통합 검색 로직 (D열, F열, 상품명, 바코드 모두 검색 가능)
+                filtered = master_df[
+                    master_df['상품코드(D)'].astype(str).str.contains(search_val, case=False) |
+                    master_df['상품코드(F)'].astype(str).str.contains(search_val, case=False) |
+                    master_df['상품명'].str.contains(search_val) |
+                    master_df['상품바코드'].astype(str).str.contains(search_val)
+                ]
                 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("✅ 가용재고 (AB열)", f"{item['가용재고']:,} EA")
-                col2.metric("⚠️ 불량/불가 (AE열)", f"{item['불량재고']:,} EA")
-                col3.metric("📊 총 재고합계 (AF열)", f"{item['총합계']:,} EA")
-                
-                # 상세 내역
-                with st.expander("세부 데이터 보기"):
-                    st.dataframe(result, use_container_width=True, hide_index=True)
-            else:
-                st.error("입력하신 상품코드를 찾을 수 없습니다.")
+                if not filtered.empty:
+                    # 가용재고가 있는 데이터만 표시 (AB열 > 0)
+                    available_only = filtered[filtered['가용재고'] > 0]
+                    
+                    st.metric("총 가용재고 합계", f"{available_only['가용재고'].sum():,} EA")
+                    
+                    # 요청하신 순서 고정 출력
+                    display_cols = ['상품코드(D)', '상품명', '화주LOT', '유효일자', '셀', '상품코드(F)', '가용재고']
+                    st.dataframe(
+                        available_only[display_cols].style.applymap(highlight_expiry, subset=['유효일자']),
+                        use_container_width=True, hide_index=True
+                    )
+                else:
+                    st.warning("일치하는 가용재고 정보가 없습니다.")
 
-        # 3. 전체 현황 요약 리스트
-        st.divider()
-        st.subheader("📋 전체 품목 재고 현황 (합산)")
-        summary_all = inventory_df.groupby(['상품코드', '상품명']).sum().reset_index()
-        st.dataframe(summary_all, use_container_width=True, hide_index=True)
+        with tab2:
+            st.subheader("불량 및 출고 불가 재고")
+            search_val_bad = st.text_input("🔍 검색 (ME코드 / 3PL코드 / 상품명 / 바코드)", key="search_bad")
+            
+            if search_val_bad:
+                filtered_bad = master_df[
+                    master_df['상품코드(D)'].astype(str).str.contains(search_val_bad, case=False) |
+                    master_df['상품코드(F)'].astype(str).str.contains(search_val_bad, case=False) |
+                    master_df['상품명'].str.contains(search_val_bad) |
+                    master_df['상품바코드'].astype(str).str.contains(search_val_bad)
+                ]
+                
+                if not filtered_bad.empty:
+                    # 불량재고가 있는 데이터만 표시 (AE열 > 0)
+                    bad_only = filtered_bad[filtered_bad['불량재고'] > 0]
+                    
+                    st.metric("총 불량재고 합계", f"{bad_only['불량재고'].sum():,} EA", delta_color="inverse")
+                    
+                    # 불량 탭에서도 동일한 순서 고정 (가용재고 대신 불량재고 표시)
+                    display_cols_bad = ['상품코드(D)', '상품명', '화주LOT', '유효일자', '셀', '상품코드(F)', '불량재고']
+                    st.dataframe(
+                        bad_only[display_cols_bad].style.applymap(highlight_expiry, subset=['유효일자']),
+                        use_container_width=True, hide_index=True
+                    )
+                else:
+                    st.warning("일치하는 불량재고 정보가 없습니다.")
 
     except Exception as e:
-        st.error(f"파일을 읽는 중 오류가 발생했습니다. 파일이 열려있는지 또는 형식이 맞는지 확인해 주세요. \n 오류 내용: {e}")
+        st.error(f"파일을 분석하는 중 오류가 발생했습니다. 양식을 확인해 주세요. ({e})")
 else:
-    st.info("3PL 전산에서 받은 엑셀 파일을 업로드하면 조회가 시작됩니다.")
+    st.info("3PL 엑셀 파일을 업로드하면 탭별 조회가 가능합니다.")
