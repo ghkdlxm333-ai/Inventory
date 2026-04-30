@@ -7,21 +7,32 @@ from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
 # 1. 페이지 설정
 st.set_page_config(page_title="SCM 통합 재고관리 Pro", layout="wide", page_icon="📦")
 
-# 2. 디자인 커스텀 CSS (필터 아이콘 강조 및 상시 노출)
+# 2. 디자인 커스텀 CSS (아이콘 모양 및 가시성 강제 고정)
 st.markdown("""
     <style>
-    /* 헤더 레이아웃 설정 */
-    .ag-header-cell-label { display: flex !important; align-items: center !important; font-weight: bold !important; }
+    /* 1. 헤더 텍스트와 아이콘 배치 최적화 */
+    .ag-header-cell-label {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        width: 100% !important;
+        padding-right: 5px !important;
+    }
     
-    /* 필터 아이콘을 엑셀처럼 파란색으로 상시 노출 */
+    /* 2. 메뉴 아이콘을 '깔때기 필터' 모양으로 시각적 강조 및 상시 노출 */
     .ag-header-cell-menu-button {
         opacity: 1 !important;
         display: inline-block !important;
         visibility: visible !important;
+        color: #0984e3 !important; /* 선명한 파란색 */
+        margin-left: 10px !important;
+    }
+    
+    /* 3. 플로팅 필터(검색창) 내부 아이콘 강조 */
+    .ag-floating-filter-button-button {
         color: #0984e3 !important;
     }
-    .ag-header-icon { color: #0984e3 !important; }
-    
+
     /* 지표 카드 디자인 */
     .metric-container {
         background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 12px;
@@ -35,10 +46,10 @@ st.markdown("""
 # AgGrid 한글 설정
 AG_GRID_LOCALE_KR = {
     'filterOoo': '검색...', 'applyFilter': '적용', 'resetFilter': '초기화', 'clearFilter': '해제',
-    'columns': '컬럼 관리', 'sum': '합계', 'count': '개수', 'avg': '평균'
+    'columns': '컬럼 관리', 'sum': '합계', 'count': '개수', 'avg': '평균', 'noRowsToShow': '데이터가 없습니다'
 }
 
-# 3. 데이터 로드 및 전처리 (Box 환산 로직 포함)
+# 3. 데이터 로드 및 전처리
 @st.cache_data(show_spinner="데이터 분석 중...")
 def load_and_validate_data(file):
     try:
@@ -53,6 +64,7 @@ def load_and_validate_data(file):
         master_df = df.iloc[:, raw_cols].copy()
         master_df.columns = ['상품코드', '상품명', '화주LOT', '유효일자_raw', '셀', '웰로스코드', '가용재고', '불량재고', '상품바코드', '입수량(BOX)']
         
+        # 날짜 정제 (스크린샷의 1899년 이슈 방지)
         master_df['유효일자_dt'] = pd.to_datetime(master_df['유효일자_raw'], errors='coerce')
         master_df['유효일자'] = master_df['유효일자_dt'].dt.strftime('%Y-%m-%d').fillna("미기입")
         
@@ -63,7 +75,6 @@ def load_and_validate_data(file):
         master_df['잔여일수'] = (master_df['유효일자_dt'] - today).dt.days.fillna(0).astype(int)
         master_df['잔여비율(%)'] = (master_df['잔여일수'] / 1095 * 100).clip(0, 100).fillna(0).astype(int)
         
-        # Box 환산 컬럼 생성
         master_df['가용_Box환산'] = master_df.apply(lambda x: round(x['가용재고']/x['입수량(BOX)'], 1) if x['입수량(BOX)'] > 0 else 0, axis=1)
         master_df['불량_Box환산'] = master_df.apply(lambda x: round(x['불량재고']/x['입수량(BOX)'], 1) if x['입수량(BOX)'] > 0 else 0, axis=1)
 
@@ -74,69 +85,55 @@ def load_and_validate_data(file):
 def render_styled_aggrid(data, threshold, use_filter, tab_type):
     gb = GridOptionsBuilder.from_dataframe(data)
     
-    # [조치 1] 필터 탭을 최우선으로 설정하여 아이콘 유실 방지
+    # [핵심] 필터 아이콘 클릭 시 '필터'만 뜨도록 탭 순서 강제 고정
     gb.configure_default_column(
         resizable=True, 
         sortable=True, 
         filterable=True, 
         floatingFilter=use_filter,
-        menuTabs=['filterMenuTab', 'columnsMenuTab', 'generalMenuTab'], # 필터 탭을 첫 번째로
+        menuTabs=['filterMenuTab'], # 다른 탭(컬럼 관리 등)은 사이드바에서 하므로 헤더 아이콘에서는 필터만 노출
         minWidth=100
     )
 
-    # [조치 2] 사이드바와 상태바(드래그 합계) 동시 활성화
     gb.configure_grid_options(
         enableRangeSelection=True,
-        statusBar={
-            "statusPanels": [
-                {"statusPanel": "agAggregationComponent", "align": "right"}
-            ]
-        },
+        statusBar={"statusPanels": [{"statusPanel": "agAggregationComponent", "align": "right"}]},
         sideBar={
-            "toolPanels": [
-                {
-                    "id": "columns",
-                    "labelDefault": "컬럼 숨기기",
-                    "labelKey": "columns",
-                    "iconKey": "columns",
-                    "toolPanel": "agColumnsToolPanel",
-                }
-            ],
-            "defaultToolPanel": "" # 기본은 닫힘 상태
+            "toolPanels": [{
+                "id": "columns", "labelDefault": "컬럼 관리", "labelKey": "columns",
+                "iconKey": "columns", "toolPanel": "agColumnsToolPanel"
+            }],
+            "defaultToolPanel": ""
         },
         localeText=AG_GRID_LOCALE_KR,
-        suppressMenuHide=True # 마우스 오버 없이도 아이콘 상시 노출
+        suppressMenuHide=True, # 아이콘 상시 노출
+        primaryColsHeaderHeight=40
     )
     
-    # [조치 3] 탭별 필수/숨김/삭제 컬럼 정의
+    # 탭별 컬럼 구성
     if tab_type == "avail":
-        active_cols = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '가용재고']
-        hidden_cols = ['가용_Box환산', '잔여일수', '셀', '입수량(BOX)']
-        drop_cols = ['잔여비율(%)', '불량재고', '불량_Box환산', '상품바코드']
+        active = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '가용재고']
+        hidden = ['가용_Box환산', '잔여일수', '셀', '입수량(BOX)']
     elif tab_type == "bad":
-        active_cols = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '불량재고']
-        hidden_cols = ['불량_Box환산', '잔여일수', '셀', '입수량(BOX)']
-        drop_cols = ['잔여비율(%)', '가용재고', '가용_Box환산', '상품바코드']
-    elif tab_type == "exp":
-        active_cols = ['상품코드', '상품명', '화주LOT', '유효일자', '가용재고', '잔여일수', '잔여비율(%)']
-        hidden_cols = ['웰로스코드', '셀', '입수량(BOX)']
-        drop_cols = ['가용_Box환산', '불량_Box환산', '불량재고', '상품바코드']
+        active = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '불량재고']
+        hidden = ['불량_Box환산', '잔여일수', '셀', '입수량(BOX)']
+    else: # exp
+        active = ['상품코드', '상품명', '화주LOT', '유효일자', '가용재고', '잔여일수', '잔여비율(%)']
+        hidden = ['웰로스코드', '셀', '입수량(BOX)']
 
-    # 컬럼 설정 적용 (순서 보장)
     for col in data.columns:
-        if col in active_cols:
+        if col in active:
             gb.configure_column(col, hide=False, pinned='left' if col in ['상품코드', '상품명'] else None)
-        elif col in hidden_cols:
+        elif col in hidden:
             gb.configure_column(col, hide=True)
         else:
             gb.configure_column(col, hide=True)
 
-    # 임박 재고 빨간색 강조 (JS)
+    # 유효기한 빨간색 강조
     gb.configure_column("유효일자", cellStyle=JsCode(
         f"function(params) {{ return params.data.잔여일수 <= {threshold} ? {{'color': '#d63031', 'fontWeight': 'bold'}} : null; }}"
     ))
 
-    # 잔여비율 프로그레스 바 (임박 탭)
     if tab_type == "exp":
         percent_renderer = JsCode("""
         class PercentBarRenderer {
@@ -153,15 +150,7 @@ def render_styled_aggrid(data, threshold, use_filter, tab_type):
         """)
         gb.configure_column("잔여비율(%)", cellRenderer=percent_renderer, minWidth=140)
 
-    return AgGrid(
-        data, 
-        gridOptions=gb.build(), 
-        height=600, 
-        theme='alpine', 
-        allow_unsafe_jscode=True, 
-        enable_enterprise_modules=True, # 드래그 합계 및 사이드바 필수 설정
-        update_mode=GridUpdateMode.VALUE_CHANGED
-    )
+    return AgGrid(data, gridOptions=gb.build(), height=600, theme='alpine', allow_unsafe_jscode=True, enable_enterprise_modules=True)
 
 # 5. 메인 실행부
 st.title("📦 3PL 통합 재고관리 Pro")
