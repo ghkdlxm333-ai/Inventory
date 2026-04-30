@@ -7,7 +7,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
 # 페이지 설정
 st.set_page_config(page_title="SCM 통합 재고관리 Pro", layout="wide", page_icon="📦")
 
-# 디자인 커스텀 CSS (필터 아이콘 및 스타일 보강)
+# 디자인 커스텀 CSS (필터 아이콘 상시 노출 강조)
 st.markdown("""
     <style>
     .metric-container {
@@ -21,16 +21,22 @@ st.markdown("""
     .metric-label { color: #636e72; font-size: 0.85rem; font-weight: 600; margin-bottom: 3px; }
     .metric-value { color: #0984e3; font-size: 1.2rem; font-weight: 700; }
     
-    /* AgGrid 필터 아이콘 강제 노출 설정 */
+    /* AgGrid 필터 아이콘 상시 노출 강제 설정 */
     .ag-header-cell-menu-button { 
         opacity: 1 !important; 
-        display: block !important; 
+        display: inline-block !important; 
         visibility: visible !important; 
-        color: #0984e3 !important;
+        width: 25px !important;
     }
     .ag-header-icon { color: #0984e3 !important; }
-    .ag-header-cell-label { font-weight: bold !important; }
     
+    /* 상태바(합계창) 디자인 */
+    .ag-status-bar {
+        background-color: #f8f9fa !important;
+        font-weight: bold;
+        color: #0984e3;
+        border-top: 1px solid #dee2e6 !important;
+    }
     .sidebar-info { font-size: 0.9rem; color: #0984e3; font-weight: bold; background: #e1f5fe; padding: 10px; border-radius: 8px; margin-top: -15px; margin-bottom: 15px; }
     </style>
 """, unsafe_allow_html=True)
@@ -68,7 +74,7 @@ def load_and_validate_data(file):
         return f"오류 발생: {e}"
 
 def render_styled_aggrid(data, threshold, tab_type):
-    # 탭별 순서 정의
+    # 컬럼 순서 정의
     if tab_type == "avail":
         display_cols = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '가용재고']
     elif tab_type == "bad":
@@ -76,24 +82,27 @@ def render_styled_aggrid(data, threshold, tab_type):
     elif tab_type == "exp":
         display_cols = ['상품코드', '상품명', '화주LOT', '유효일자', '가용재고', '잔여일수', '잔여비율', '웰로스코드']
     
-    # 데이터 순서 재정렬 및 필요한 컬럼만 추출
     target_df = data[display_cols].copy()
-    
     gb = GridOptionsBuilder.from_dataframe(target_df)
     
-    # 공통 설정: 필터 메뉴 항상 노출(suppressMenuHide) 및 필터 활성화
+    # [핵심] 기본 컬럼 정의 - 필터 아이콘 상시 노출 설정
     gb.configure_default_column(
         resizable=True, 
         sortable=True, 
-        filterable=True, 
-        suppressMenuHide=False,  # 메뉴 버튼 숨김 방지 (아이콘 상시 노출 핵심)
-        minWidth=100
+        filterable=True,
+        menuTabs=['filterMenuTab'], # 클릭 시 필터 탭이 바로 뜨도록 설정
+        suppressMenuHide=False       # 메뉴 버튼 자동 숨김 방지
     )
     
-    # 컬럼별 개별 설정
     gb.configure_column("상품코드", pinned='left', width=130)
     gb.configure_column("상품명", pinned='left', width=250)
     
+    # 드래그 시 합계 계산을 위한 수량 컬럼 설정
+    if "가용재고" in display_cols:
+        gb.configure_column("가용재고", type=["numericColumn","numberColumnFilter"], aggFunc='sum')
+    if "불량재고" in display_cols:
+        gb.configure_column("불량재고", type=["numericColumn","numberColumnFilter"], aggFunc='sum')
+
     if "잔여비율" in display_cols:
         percent_renderer = JsCode("""
         class PercentBarRenderer {
@@ -110,14 +119,28 @@ def render_styled_aggrid(data, threshold, tab_type):
         """)
         gb.configure_column("잔여비율", headerName="잔여비율(%)", cellRenderer=percent_renderer, minWidth=150)
 
-    # 유효일자 강조 색상
     gb.configure_column("유효일자", cellStyle=JsCode(f"function(params) {{ return params.data.잔여일수 <= {threshold} ? {{'color': '#d63031', 'fontWeight': 'bold'}} : null; }}"))
     
+    # [핵심] 수량 드래그 시 하단 합계 노출 설정
     gb.configure_grid_options(
-        enableRangeSelection=True,
+        enableRangeSelection=True,  # 범위 선택 활성화 (드래그)
+        enableCharts=True,
+        statusBar={
+            "statusPanels": [
+                { "statusPanel": "agTotalAndFilteredRowCountComponent", "align": "left" },
+                { "statusPanel": "agAggregationComponent", "align": "right" } # 드래그 시 합계/평균 표시
+            ]
+        },
         pagination=True,
         paginationPageSize=20,
-        localeText={'filterOoo': '필터...', 'equals': '같음', 'contains': '포함', 'applyFilter': '적용', 'resetFilter': '초기화'}
+        localeText={
+            'filterOoo': '필터링...', 
+            'equals': '같음', 
+            'contains': '포함',
+            'sum': '합계',
+            'avg': '평균',
+            'count': '개수'
+        }
     )
     
     return AgGrid(
@@ -126,10 +149,10 @@ def render_styled_aggrid(data, threshold, tab_type):
         height=550, 
         theme='alpine', 
         allow_unsafe_jscode=True,
-        update_mode=GridUpdateMode.VALUE_CHANGED
+        enable_enterprise_modules=True # 합계 상태바 기능을 위해 Enterprise 모드 활성화 (커뮤니티에서도 일부 작동)
     )
 
-# 실행부
+# 메인 로직
 uploaded_file = st.file_uploader("📦 3PL 재고 엑셀 업로드", type=['xlsx'])
 
 if uploaded_file:
@@ -159,9 +182,6 @@ if uploaded_file:
 
         tab1, tab2, tab3 = st.tabs(["✅ 가용재고", "⚠️ 불량재고", "🚨 임박재고"])
         
-        with tab1:
-            render_styled_aggrid(filtered_df[filtered_df['가용재고']>0], days_limit, "avail")
-        with tab2:
-            render_styled_aggrid(filtered_df[filtered_df['불량재고']>0], days_limit, "bad")
-        with tab3:
-            render_styled_aggrid(filtered_df[(filtered_df['가용재고']>0) & (filtered_df['잔여일수']<=days_limit)], days_limit, "exp")
+        with tab1: render_styled_aggrid(filtered_df[filtered_df['가용재고']>0], days_limit, "avail")
+        with tab2: render_styled_aggrid(filtered_df[filtered_df['불량재고']>0], days_limit, "bad")
+        with tab3: render_styled_aggrid(filtered_df[(filtered_df['가용재고']>0) & (filtered_df['잔여일수']<=days_limit)], days_limit, "exp")
