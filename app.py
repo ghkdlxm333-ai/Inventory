@@ -7,7 +7,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
 # 페이지 설정
 st.set_page_config(page_title="SCM 통합 재고관리 Pro", layout="wide", page_icon="📦")
 
-# 디자인 커스텀 CSS (필터 아이콘 상시 노출 및 레이아웃 최적화)
+# 디자인 커스텀 CSS (필터 아이콘 및 스타일 보강)
 st.markdown("""
     <style>
     .metric-container {
@@ -21,12 +21,16 @@ st.markdown("""
     .metric-label { color: #636e72; font-size: 0.85rem; font-weight: 600; margin-bottom: 3px; }
     .metric-value { color: #0984e3; font-size: 1.2rem; font-weight: 700; }
     
-    /* AgGrid 헤더 및 필터 아이콘 강제 노출 */
-    .ag-header-cell-menu-button { opacity: 1 !important; display: block !important; visibility: visible !important; }
+    /* AgGrid 필터 아이콘 강제 노출 설정 */
+    .ag-header-cell-menu-button { 
+        opacity: 1 !important; 
+        display: block !important; 
+        visibility: visible !important; 
+        color: #0984e3 !important;
+    }
     .ag-header-icon { color: #0984e3 !important; }
     .ag-header-cell-label { font-weight: bold !important; }
     
-    /* 사이드바 보조 텍스트 스타일 */
     .sidebar-info { font-size: 0.9rem; color: #0984e3; font-weight: bold; background: #e1f5fe; padding: 10px; border-radius: 8px; margin-top: -15px; margin-bottom: 15px; }
     </style>
 """, unsafe_allow_html=True)
@@ -64,26 +68,33 @@ def load_and_validate_data(file):
         return f"오류 발생: {e}"
 
 def render_styled_aggrid(data, threshold, tab_type):
-    gb = GridOptionsBuilder.from_dataframe(data)
-    gb.configure_default_column(resizable=True, sortable=True, filterable=True, minWidth=100)
+    # 탭별 순서 정의
+    if tab_type == "avail":
+        display_cols = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '가용재고']
+    elif tab_type == "bad":
+        display_cols = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '불량재고']
+    elif tab_type == "exp":
+        display_cols = ['상품코드', '상품명', '화주LOT', '유효일자', '가용재고', '잔여일수', '잔여비율', '웰로스코드']
     
-    # 1. 탭별 컬럼 제어 (보여야 할 컬럼 설정)
-    if tab_type == "avail": # 가용재고
-        visible_cols = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '가용재고']
-        gb.configure_column("상품코드", pinned='left', width=130)
-        gb.configure_column("상품명", pinned='left', width=250)
+    # 데이터 순서 재정렬 및 필요한 컬럼만 추출
+    target_df = data[display_cols].copy()
     
-    elif tab_type == "bad": # 불량재고
-        visible_cols = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '불량재고']
-        gb.configure_column("상품코드", pinned='left', width=130)
-        gb.configure_column("상품명", pinned='left', width=250)
-        
-    elif tab_type == "exp": # 임박재고
-        visible_cols = ['상품코드', '상품명', '화주LOT', '유효일자', '가용재고', '잔여일수', '잔여비율', '웰로스코드']
-        gb.configure_column("상품코드", pinned='left', width=130)
-        gb.configure_column("상품명", pinned='left', width=250)
-        
-        # 잔여비율 시각화
+    gb = GridOptionsBuilder.from_dataframe(target_df)
+    
+    # 공통 설정: 필터 메뉴 항상 노출(suppressMenuHide) 및 필터 활성화
+    gb.configure_default_column(
+        resizable=True, 
+        sortable=True, 
+        filterable=True, 
+        suppressMenuHide=False,  # 메뉴 버튼 숨김 방지 (아이콘 상시 노출 핵심)
+        minWidth=100
+    )
+    
+    # 컬럼별 개별 설정
+    gb.configure_column("상품코드", pinned='left', width=130)
+    gb.configure_column("상품명", pinned='left', width=250)
+    
+    if "잔여비율" in display_cols:
         percent_renderer = JsCode("""
         class PercentBarRenderer {
             init(params) {
@@ -99,23 +110,24 @@ def render_styled_aggrid(data, threshold, tab_type):
         """)
         gb.configure_column("잔여비율", headerName="잔여비율(%)", cellRenderer=percent_renderer, minWidth=150)
 
-    # 정의된 컬럼 외 모두 숨김
-    all_cols = data.columns.tolist()
-    for col in all_cols:
-        if col not in visible_cols:
-            gb.configure_column(col, hide=True)
-
-    # 유효일자 강조 로직
+    # 유효일자 강조 색상
     gb.configure_column("유효일자", cellStyle=JsCode(f"function(params) {{ return params.data.잔여일수 <= {threshold} ? {{'color': '#d63031', 'fontWeight': 'bold'}} : null; }}"))
     
     gb.configure_grid_options(
         enableRangeSelection=True,
         pagination=True,
         paginationPageSize=20,
-        domLayout='normal',
-        localeText={'filterOoo': '필터...', 'equals': '같음', 'contains': '포함'}
+        localeText={'filterOoo': '필터...', 'equals': '같음', 'contains': '포함', 'applyFilter': '적용', 'resetFilter': '초기화'}
     )
-    return AgGrid(data, gridOptions=gb.build(), height=500, theme='alpine', allow_unsafe_jscode=True)
+    
+    return AgGrid(
+        target_df, 
+        gridOptions=gb.build(), 
+        height=550, 
+        theme='alpine', 
+        allow_unsafe_jscode=True,
+        update_mode=GridUpdateMode.VALUE_CHANGED
+    )
 
 # 실행부
 uploaded_file = st.file_uploader("📦 3PL 재고 엑셀 업로드", type=['xlsx'])
@@ -125,21 +137,14 @@ if uploaded_file:
     if isinstance(master_df, str):
         st.error(master_df)
     else:
-        # 사이드바 설정 및 기간 직관적 표기
         st.sidebar.title("⚙️ 관리 설정")
         days_limit = st.sidebar.slider("🚨 유효일자 알림 기준(일)", 30, 1095, 365)
         
-        # 1. 설정 일수 계산 (년/개월)
         years = days_limit // 365
         months = (days_limit % 365) // 30
-        duration_text = f"현재 설정: "
-        if years > 0: duration_text += f"{years}년 "
-        if months > 0: duration_text += f"{months}개월 "
-        duration_text += "이하 남은 재고 검색"
-        
+        duration_text = f"현재 설정: {f'{years}년 ' if years > 0 else ''}{f'{months}개월 ' if months > 0 else ''}이하 재고 검색"
         st.sidebar.markdown(f'<div class="sidebar-info">{duration_text}</div>', unsafe_allow_html=True)
         
-        # 대시보드
         slow_df = master_df[(master_df['가용재고'] > 0) & (master_df['잔여일수'] <= days_limit)]
         c1, c2, c3 = st.columns(3)
         with c1: st.markdown(f'<div class="metric-container"><div class="metric-label">✅ 전체 가용재고</div><div class="metric-value">{master_df["가용재고"].sum():,}</div></div>', unsafe_allow_html=True)
@@ -159,5 +164,4 @@ if uploaded_file:
         with tab2:
             render_styled_aggrid(filtered_df[filtered_df['불량재고']>0], days_limit, "bad")
         with tab3:
-            # 임박재고 탭은 가용재고가 있으면서 설정한 일수 이하로 남은 데이터 표시
             render_styled_aggrid(filtered_df[(filtered_df['가용재고']>0) & (filtered_df['잔여일수']<=days_limit)], days_limit, "exp")
