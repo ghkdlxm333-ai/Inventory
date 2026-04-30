@@ -7,7 +7,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
 # 페이지 설정
 st.set_page_config(page_title="SCM 통합 재고관리 Pro", layout="wide", page_icon="📦")
 
-# 디자인 커스텀 CSS
+# 디자인 커스텀 CSS (필터 아이콘 및 UI 최적화)
 st.markdown("""
     <style>
     .metric-container {
@@ -75,21 +75,24 @@ def load_and_validate_data(file):
 def render_styled_aggrid(data, threshold, use_filter, tab_type="normal"):
     gb = GridOptionsBuilder.from_dataframe(data)
     
-    # 기본 설정: 필터 활성화 및 사이드바 토글 연동
+    # 1. 기본 컬럼 설정 (floatingFilter 강제 적용)
     gb.configure_default_column(
         resizable=True, 
         sortable=True, 
         filterable=True, 
-        floatingFilter=use_filter,
+        floatingFilter=use_filter, # 사이드바 토글 연동
         minWidth=110, 
         flex=1
     )
     
-    # [수정] 고정 열에도 floatingFilter가 확실히 적용되도록 개별 재설정
-    gb.configure_column("상품코드", pinned='left', width=130, cellStyle={'textAlign': 'center'}, floatingFilter=use_filter)
-    gb.configure_column("상품명", pinned='left', width=250, flex=2, floatingFilter=use_filter)
-    gb.configure_column("화주LOT", floatingFilter=use_filter)
-    gb.configure_column("웰로스코드", cellStyle={'textAlign': 'center'}, floatingFilter=use_filter)
+    # 2. [핵심수정] 고정된 열(Left Pinned)에 필터 기능 명시적 강제
+    # 고정 열은 개별 설정이 default 설정보다 우선되므로 여기서 직접 정의해야 합니다.
+    gb.configure_column("상품코드", pinned='left', width=130, cellStyle={'textAlign': 'center'}, floatingFilter=use_filter, filter='agTextColumnFilter')
+    gb.configure_column("상품명", pinned='left', width=250, flex=2, floatingFilter=use_filter, filter='agTextColumnFilter')
+    
+    # 3. 기타 주요 열 필터 타입 지정
+    gb.configure_column("화주LOT", floatingFilter=use_filter, filter='agTextColumnFilter')
+    gb.configure_column("웰로스코드", cellStyle={'textAlign': 'center'}, floatingFilter=use_filter, filter='agTextColumnFilter')
 
     if "가용재고" in data.columns: gb.configure_column("가용재고", aggFunc='sum', type=["numericColumn"])
     if "불량재고" in data.columns: gb.configure_column("불량재고", aggFunc='sum', type=["numericColumn"])
@@ -117,11 +120,13 @@ def render_styled_aggrid(data, threshold, use_filter, tab_type="normal"):
 
     gb.configure_column("유효일자", cellStyle=JsCode(f"function(params) {{ return params.data.잔여일수 <= {threshold} ? {{'color': '#d63031', 'fontWeight': 'bold'}} : null; }}"))
     
+    # 4. 그리드 전역 옵션 설정
     gb.configure_grid_options(
         enableRangeSelection=True,
         statusBar={"statusPanels": [{"statusPanel": "agAggregationComponent", "align": "right"}]},
         localeText=AG_GRID_LOCALE_KR,
-        groupIncludeTotalFooter=True
+        groupIncludeTotalFooter=True,
+        floatingFiltersHeight=40 # 필터 영역 높이 명시
     )
     return AgGrid(data, gridOptions=gb.build(), height=600, theme='alpine', allow_unsafe_jscode=True)
 
@@ -134,7 +139,10 @@ if uploaded_file:
     if isinstance(master_df, str): st.error(master_df)
     else:
         st.sidebar.title("⚙️ 관리 설정")
+        
+        # 필터 토글 스위치
         use_filter = st.sidebar.checkbox("🔍 열별 필터 검색창 표시", value=False)
+        
         days_limit = st.sidebar.slider("🚨 임박 기준(일)", 30, 1095, 548)
         
         years = days_limit // 365
