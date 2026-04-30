@@ -7,20 +7,33 @@ from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
 # 1. 페이지 설정
 st.set_page_config(page_title="SCM 통합 재고관리 Pro", layout="wide", page_icon="📦")
 
-# 2. 디자인 커스텀 CSS
+# 2. 디자인 커스텀 CSS (아이콘을 목록명 바로 옆에 고정하고 강조)
 st.markdown("""
     <style>
-    /* 헤더 내 필터 아이콘 강조 */
+    /* 1. 상시 검색창 영역 제거 (공간 확보) */
+    .ag-floating-filter { display: none !important; }
+    
+    /* 2. 헤더 목록명과 아이콘 정렬 */
+    .ag-header-cell-label {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        width: 100% !important;
+    }
+
+    /* 3. 필터 아이콘(깔때기) 상시 노출 및 파란색 강조 */
     .ag-header-cell-menu-button {
         opacity: 1 !important;
         display: inline-block !important;
         visibility: visible !important;
         color: #0984e3 !important;
+        cursor: pointer !important;
     }
-    /* 플로팅 필터(입력창) 가시성 확보 */
-    .ag-floating-filter-input {
-        background-color: #f8f9fa !important;
-    }
+    
+    /* 4. 필터 팝업창 내부 디자인 살짝 수정 */
+    .ag-filter-wrapper { padding: 10px !important; }
+
+    /* 지표 카드 디자인 */
     .metric-container {
         background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 12px;
         padding: 12px 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); text-align: center;
@@ -32,8 +45,8 @@ st.markdown("""
 
 # AgGrid 한글 설정
 AG_GRID_LOCALE_KR = {
-    'filterOoo': '검색...', 'applyFilter': '적용', 'resetFilter': '초기화', 'clearFilter': '해제',
-    'columns': '컬럼 관리', 'sum': '합계', 'count': '개수', 'avg': '평균'
+    'filterOoo': '필터링 검색...', 'applyFilter': '적용', 'resetFilter': '초기화', 'clearFilter': '해제',
+    'columns': '컬럼 관리', 'sum': '합계', 'count': '개수'
 }
 
 # 3. 데이터 로드 및 전처리
@@ -51,6 +64,7 @@ def load_and_validate_data(file):
         master_df = df.iloc[:, raw_cols].copy()
         master_df.columns = ['상품코드', '상품명', '화주LOT', '유효일자_raw', '셀', '웰로스코드', '가용재고', '불량재고', '상품바코드', '입수량(BOX)']
         
+        # 1899년 날짜 오류 방지 처리
         master_df['유효일자_dt'] = pd.to_datetime(master_df['유효일자_raw'], errors='coerce')
         master_df['유효일자'] = master_df['유효일자_dt'].dt.strftime('%Y-%m-%d').fillna("미기입")
         
@@ -68,27 +82,27 @@ def load_and_validate_data(file):
     except Exception as e: return f"오류: {e}"
 
 # 4. AgGrid 렌더링 함수
-def render_styled_aggrid(data, threshold, use_filter, tab_type):
+def render_styled_aggrid(data, threshold, tab_type):
     gb = GridOptionsBuilder.from_dataframe(data)
     
-    # [개선 핵심] 모든 열에 대해 텍스트 필터 및 입력창(floatingFilter) 강제 활성화
+    # [가장 중요한 설정] 상시 검색창은 끄고, 아이콘 클릭 시 필터 팝업만 활성화
     gb.configure_default_column(
-        filterable=True,
-        sortable=True,
-        resizable=True,
-        floatingFilter=use_filter,  # 사이드바 체크 시 입력창 노출
-        menuTabs=['filterMenuTab'],  # 클릭 시 필터 탭만 노출 (다른 메뉴와 충돌 방지)
+        resizable=True, 
+        sortable=True, 
+        filterable=True, 
+        floatingFilter=False, # 상시 검색창 OFF
+        menuTabs=['filterMenuTab'], # 아이콘 클릭 시 즉시 필터 탭 노출
         suppressMenu=False
     )
 
-    # 개별 컬럼 필터 타입 명시 (문자열은 agTextColumnFilter, 숫자는 agNumberColumnFilter)
+    # 개별 컬럼 필터 타입 지정
     for col in data.columns:
         if col in ['가용재고', '불량재고', '가용_Box환산', '불량_Box환산', '입수량(BOX)', '잔여일수']:
             gb.configure_column(col, filter='agNumberColumnFilter')
         else:
             gb.configure_column(col, filter='agTextColumnFilter')
 
-    # 그리드 전역 옵션 (합계 드래그 + 컬럼 관리 사이드바)
+    # 그리드 기능 (드래그 합계 + 컬럼 숨김 사이드바)
     gb.configure_grid_options(
         enableRangeSelection=True,
         statusBar={"statusPanels": [{"statusPanel": "agAggregationComponent", "align": "right"}]},
@@ -101,16 +115,16 @@ def render_styled_aggrid(data, threshold, use_filter, tab_type):
         },
         localeText=AG_GRID_LOCALE_KR,
         suppressMenuHide=True, # 아이콘 상시 노출
-        floatingFiltersHeight=40 if use_filter else 0
+        headerHeight=45
     )
     
-    # 탭별 컬럼 제어
+    # 탭별 컬럼 구성 및 순서
     if tab_type == "avail":
-        active, hidden = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '가용재고'], ['가용_Box환산', '잔여일수', '셀', '입수량(BOX)']
+        active = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '가용재고']
     elif tab_type == "bad":
-        active, hidden = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '불량재고'], ['불량_Box환산', '잔여일수', '셀', '입수량(BOX)']
+        active = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '불량재고']
     else: # exp
-        active, hidden = ['상품코드', '상품명', '화주LOT', '유효일자', '가용재고', '잔여일수', '잔여비율(%)'], ['웰로스코드', '셀', '입수량(BOX)']
+        active = ['상품코드', '상품명', '화주LOT', '유효일자', '가용재고', '잔여일수', '잔여비율(%)']
 
     for col in data.columns:
         if col in active:
@@ -118,26 +132,10 @@ def render_styled_aggrid(data, threshold, use_filter, tab_type):
         else:
             gb.configure_column(col, hide=True)
 
-    # 조건부 서식
+    # 유효일자 강조 및 프로그레스 바
     gb.configure_column("유효일자", cellStyle=JsCode(
         f"function(params) {{ return params.data.잔여일수 <= {threshold} ? {{'color': '#d63031', 'fontWeight': 'bold'}} : null; }}"
     ))
-
-    if tab_type == "exp":
-        percent_renderer = JsCode("""
-        class PercentBarRenderer {
-            init(params) {
-                this.eGui = document.createElement('div');
-                let val = params.value;
-                let color = val <= 20 ? '#ff9f43' : (val <= 50 ? '#feca57' : '#d1e9ff');
-                this.eGui.innerHTML = `<div style="width:100%; background:#f1f1f1; border-radius:10px; height:18px; border:1px solid #ddd; margin-top:6px;">
-                    <div style="width:${val}%; background:${color}; text-align:center; font-size:11px; font-weight:bold; height:100%; line-height:18px;">${val}%</div>
-                </div>`;
-            }
-            getGui() { return this.eGui; }
-        }
-        """)
-        gb.configure_column("잔여비율(%)", cellRenderer=percent_renderer, minWidth=140)
 
     return AgGrid(
         data, 
@@ -145,12 +143,10 @@ def render_styled_aggrid(data, threshold, use_filter, tab_type):
         height=600, 
         theme='alpine', 
         allow_unsafe_jscode=True, 
-        enable_enterprise_modules=True,
-        data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-        update_mode=GridUpdateMode.FILTERING_CHANGED
+        enable_enterprise_modules=True
     )
 
-# 5. 메인 실행부 (상동)
+# 5. 메인 실행부
 st.title("📦 3PL 통합 재고관리 Pro")
 uploaded_file = st.file_uploader("3PL 엑셀 원본 업로드", type=['xlsx'])
 
@@ -158,21 +154,18 @@ if uploaded_file:
     master_df = load_and_validate_data(uploaded_file)
     if isinstance(master_df, str): st.error(master_df)
     else:
-        st.sidebar.title("⚙️ 관리 설정")
-        use_filter = st.sidebar.checkbox("🔍 열별 필터 검색창 표시", value=True)
-        days_limit = st.sidebar.slider("🚨 임박 기준(일)", 30, 1095, 548)
-        
-        slow_df = master_df[(master_df['가용재고'] > 0) & (master_df['잔여일수'] <= days_limit)]
-        
+        # 상단 요약 지표
+        slow_df = master_df[(master_df['가용재고'] > 0) & (master_df['잔여일수'] <= 548)]
         c1, c2, c3 = st.columns(3)
         with c1: st.markdown(f'<div class="metric-container"><div class="metric-label">✅ 전체 가용재고</div><div class="metric-value">{master_df["가용재고"].sum():,}</div></div>', unsafe_allow_html=True)
         with c2: st.markdown(f'<div class="metric-container"><div class="metric-label">⚠️ 전체 불량재고</div><div class="metric-value">{master_df["불량재고"].sum():,}</div></div>', unsafe_allow_html=True)
         with c3: st.markdown(f'<div class="metric-container"><div class="metric-label">🚨 임박(가용기준)</div><div class="metric-value">{len(slow_df)}건</div></div>', unsafe_allow_html=True)
 
+        # 탭 출력
         tab1, tab2, tab3 = st.tabs(["✅ 가용재고", "⚠️ 불량재고", "🚨 임박재고"])
-        with tab1: render_styled_aggrid(master_df[master_df['가용재고']>0], days_limit, use_filter, "avail")
-        with tab2: render_styled_aggrid(master_df[master_df['불량재고']>0], days_limit, use_filter, "bad")
-        with tab3: render_styled_aggrid(slow_df, days_limit, use_filter, "exp")
+        with tab1: render_styled_aggrid(master_df[master_df['가용재고']>0], 548, "avail")
+        with tab2: render_styled_aggrid(master_df[master_df['불량재고']>0], 548, "bad")
+        with tab3: render_styled_aggrid(slow_df, 548, "exp")
 
         # 수주 가용성 실시간 분석
         st.markdown("---")
