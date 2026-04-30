@@ -7,7 +7,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
 # [GitHub 배포 필수] 페이지 설정
 st.set_page_config(page_title="SCM 통합 재고관리 Pro", layout="wide", page_icon="📦")
 
-# 디자인 커스텀 CSS (필터 아이콘 상시 노출 및 UI 강조 유지)
+# 디자인 커스텀 CSS
 st.markdown("""
     <style>
     .metric-container {
@@ -21,7 +21,7 @@ st.markdown("""
     .metric-label { color: #636e72; font-size: 0.85rem; font-weight: 600; margin-bottom: 3px; }
     .metric-value { color: #0984e3; font-size: 1.2rem; font-weight: 700; }
     .stMetric { display: none; }
-    /* AgGrid 필터 아이콘 강제 노출 및 스타일 */
+    /* 필터 아이콘 스타일 및 그리드 최적화 */
     .ag-header-cell-label { font-weight: bold !important; font-size: 13px !important; color: #2d3436; }
     .ag-header-cell-menu-button { opacity: 1 !important; display: block !important; color: #0984e3 !important; visibility: visible !important; }
     .ag-header-icon { color: #0984e3 !important; }
@@ -62,7 +62,7 @@ def load_and_validate_data(file):
         
         today = datetime.now()
         master_df['잔여일수'] = (master_df['유효일자_dt'] - today).dt.days.fillna(0).astype(int)
-        master_df['잔여비율'] = (master_df['잔여일수'] / 730 * 100).clip(0, 100).fillna(0).astype(int)
+        master_df['잔여비율'] = (master_df['잔여일수'] / 1095 * 100).clip(0, 100).fillna(0).astype(int) # 기준 3년(1095일)
         
         for col in ['가용재고', '불량재고', '입수량(BOX)']:
             master_df[col] = pd.to_numeric(master_df[col], errors='coerce').fillna(0).astype(int)
@@ -73,10 +73,18 @@ def load_and_validate_data(file):
         return master_df.sort_values(by='유효일자_dt')
     except Exception as e: return f"오류 발생: {e}"
 
-def render_styled_aggrid(data, threshold, tab_type="normal"):
+def render_styled_aggrid(data, threshold, use_filter, tab_type="normal"):
     gb = GridOptionsBuilder.from_dataframe(data)
-    # 기본 컬럼 설정: 필터 및 정렬 활성화
-    gb.configure_default_column(resizable=True, sortable=True, filterable=True, minWidth=110, flex=1, floatingFilter=True)
+    
+    # 모든 열별 필터 기능 추가 및 토글 연동
+    gb.configure_default_column(
+        resizable=True, 
+        sortable=True, 
+        filterable=True, 
+        floatingFilter=use_filter, # 사이드바 토글에 따라 노출 여부 결정
+        minWidth=110, 
+        flex=1
+    )
     
     gb.configure_column("상품코드", pinned='left', width=130, cellStyle={'textAlign': 'center'})
     gb.configure_column("상품명", pinned='left', width=250, flex=2)
@@ -108,14 +116,14 @@ def render_styled_aggrid(data, threshold, tab_type="normal"):
 
     gb.configure_column("유효일자", cellStyle=JsCode(f"function(params) {{ return params.data.잔여일수 <= {threshold} ? {{'color': '#d63031', 'fontWeight': 'bold'}} : null; }}"))
     
-    # 드래그 합계(StatusBar) 및 상태바 설정 복구
+    # 드래그 합계 및 상태바 설정
     gb.configure_grid_options(
         enableRangeSelection=True,
         statusBar={"statusPanels": [{"statusPanel": "agAggregationComponent", "align": "right"}]},
         localeText=AG_GRID_LOCALE_KR,
         groupIncludeTotalFooter=True
     )
-    return AgGrid(data, gridOptions=gb.build(), height=600, theme='alpine', allow_unsafe_jscode=True, update_mode=GridUpdateMode.MODEL_CHANGED)
+    return AgGrid(data, gridOptions=gb.build(), height=600, theme='alpine', allow_unsafe_jscode=True)
 
 # 메인 실행부
 st.title("📦 3PL 재고 관리 시스템 (GitHub Edition)")
@@ -126,9 +134,13 @@ if uploaded_file:
     if isinstance(master_df, str): st.error(master_df)
     else:
         st.sidebar.title("⚙️ 관리 설정")
+        
+        # 필터 검색창 토글 기능 추가
+        use_filter = st.sidebar.checkbox("🔍 열별 필터 검색창 표시", value=False)
+        
         days_limit = st.sidebar.slider("🚨 임박 기준(일)", 30, 1095, 548)
         
-        # [복구] 임박 설정 하단에 년/개월 표시 추가
+        # 임박 설정 하단 년/개월 표시
         years = days_limit // 365
         months = (days_limit % 365) // 30
         st.sidebar.write(f"💡 현재 설정: 약 **{years}년 {months}개월**")
@@ -145,13 +157,12 @@ if uploaded_file:
             for word in search_input.split():
                 filtered_df = filtered_df[filtered_df['_search_idx'].str.contains(word.lower(), na=False)]
 
-        # [복구] 탭 순서 및 데이터 필터링 로직 원복
         tab1, tab2, tab3 = st.tabs(["✅ 가용재고", "⚠️ 불량재고", "🚨 임박재고"])
-        with tab1: render_styled_aggrid(filtered_df[filtered_df['가용재고']>0], days_limit, "avail")
-        with tab2: render_styled_aggrid(filtered_df[filtered_df['불량재고']>0], days_limit, "bad")
-        with tab3: render_styled_aggrid(filtered_df[(filtered_df['가용재고']>0) & (filtered_df['잔여일수']<=days_limit)], days_limit, "exp")
+        with tab1: render_styled_aggrid(filtered_df[filtered_df['가용재고']>0], days_limit, use_filter, "avail")
+        with tab2: render_styled_aggrid(filtered_df[filtered_df['불량재고']>0], days_limit, use_filter, "bad")
+        with tab3: render_styled_aggrid(filtered_df[(filtered_df['가용재고']>0) & (filtered_df['잔여일수']<=days_limit)], days_limit, use_filter, "exp")
 
-        # --- 수주 가용성 체크 독립 로직 ---
+        # 수주 가용성 분석 로직
         st.markdown("---")
         st.subheader("📑 수주 가용성 실시간 분석")
         order_file = st.file_uploader("수주서(.xlsx) 업로드", type=['xlsx'], key="gh_order")
