@@ -7,7 +7,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
 # 페이지 설정
 st.set_page_config(page_title="SCM 통합 재고관리 Pro", layout="wide", page_icon="📦")
 
-# 디자인 커스텀 CSS (필터 아이콘 및 UI 최적화)
+# 디자인 커스텀 CSS (엑셀 스타일의 헤더 및 필터 아이콘 강조)
 st.markdown("""
     <style>
     .metric-container {
@@ -21,10 +21,17 @@ st.markdown("""
     .metric-label { color: #636e72; font-size: 0.85rem; font-weight: 600; margin-bottom: 3px; }
     .metric-value { color: #0984e3; font-size: 1.2rem; font-weight: 700; }
     .stMetric { display: none; }
+    
+    /* 헤더 및 필터 아이콘 스타일 최적화 */
     .ag-header-cell-label { font-weight: bold !important; font-size: 13px !important; color: #2d3436; }
-    .ag-header-cell-menu-button { opacity: 1 !important; display: block !important; color: #0984e3 !important; visibility: visible !important; }
+    .ag-header-cell-menu-button { 
+        opacity: 1 !important; 
+        display: block !important; 
+        color: #0984e3 !important; 
+        visibility: visible !important; 
+    }
+    .ag-floating-filter-button-button { color: #0984e3 !important; }
     .ag-header-icon { color: #0984e3 !important; }
-    .ag-floating-bottom { background-color: #f8f9fa !important; font-weight: bold !important; color: #2d3436 !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -75,27 +82,26 @@ def load_and_validate_data(file):
 def render_styled_aggrid(data, threshold, use_filter, tab_type="normal"):
     gb = GridOptionsBuilder.from_dataframe(data)
     
-    # 1. 기본 컬럼 설정 (floatingFilter 강제 적용)
+    # [핵심] 모든 열에 대해 필터 기능 강제 활성화 및 엑셀 스타일 아이콘 상시 노출
     gb.configure_default_column(
         resizable=True, 
         sortable=True, 
         filterable=True, 
-        floatingFilter=use_filter, # 사이드바 토글 연동
-        minWidth=110, 
+        floatingFilter=use_filter, # 사이드바 토글에 따라 검색창 노출
+        menuTabs=['filterMenuTab'], # 엑셀처럼 아이콘 클릭 시 필터 메뉴만 보이게 설정
+        minWidth=120, 
         flex=1
     )
     
-    # 2. [핵심수정] 고정된 열(Left Pinned)에 필터 기능 명시적 강제
-    # 고정 열은 개별 설정이 default 설정보다 우선되므로 여기서 직접 정의해야 합니다.
-    gb.configure_column("상품코드", pinned='left', width=130, cellStyle={'textAlign': 'center'}, floatingFilter=use_filter, filter='agTextColumnFilter')
-    gb.configure_column("상품명", pinned='left', width=250, flex=2, floatingFilter=use_filter, filter='agTextColumnFilter')
-    
-    # 3. 기타 주요 열 필터 타입 지정
-    gb.configure_column("화주LOT", floatingFilter=use_filter, filter='agTextColumnFilter')
-    gb.configure_column("웰로스코드", cellStyle={'textAlign': 'center'}, floatingFilter=use_filter, filter='agTextColumnFilter')
-
-    if "가용재고" in data.columns: gb.configure_column("가용재고", aggFunc='sum', type=["numericColumn"])
-    if "불량재고" in data.columns: gb.configure_column("불량재고", aggFunc='sum', type=["numericColumn"])
+    # 개별 열 설정 (고정 열 및 특정 데이터 타입 열에도 필터 강제 적용)
+    # filter='agTextColumnFilter'를 사용하여 모든 열에서 검색창이 작동하게 만듭니다.
+    gb.configure_column("상품코드", pinned='left', width=130, cellStyle={'textAlign': 'center'}, filter='agTextColumnFilter')
+    gb.configure_column("상품명", pinned='left', width=250, flex=2, filter='agTextColumnFilter')
+    gb.configure_column("화주LOT", filter='agTextColumnFilter')
+    gb.configure_column("셀", filter='agTextColumnFilter')
+    gb.configure_column("웰로스코드", cellStyle={'textAlign': 'center'}, filter='agTextColumnFilter')
+    gb.configure_column("가용재고", type=["numericColumn"], filter='agNumberColumnFilter')
+    gb.configure_column("불량재고", type=["numericColumn"], filter='agNumberColumnFilter')
 
     percent_renderer = JsCode("""
     class PercentBarRenderer {
@@ -120,13 +126,12 @@ def render_styled_aggrid(data, threshold, use_filter, tab_type="normal"):
 
     gb.configure_column("유효일자", cellStyle=JsCode(f"function(params) {{ return params.data.잔여일수 <= {threshold} ? {{'color': '#d63031', 'fontWeight': 'bold'}} : null; }}"))
     
-    # 4. 그리드 전역 옵션 설정
     gb.configure_grid_options(
         enableRangeSelection=True,
         statusBar={"statusPanels": [{"statusPanel": "agAggregationComponent", "align": "right"}]},
         localeText=AG_GRID_LOCALE_KR,
         groupIncludeTotalFooter=True,
-        floatingFiltersHeight=40 # 필터 영역 높이 명시
+        suppressMenuHide=True # 엑셀처럼 필터 아이콘 항상 표시
     )
     return AgGrid(data, gridOptions=gb.build(), height=600, theme='alpine', allow_unsafe_jscode=True)
 
@@ -140,7 +145,7 @@ if uploaded_file:
     else:
         st.sidebar.title("⚙️ 관리 설정")
         
-        # 필터 토글 스위치
+        # 필터 검색창 토글 (접었다 폈다 기능)
         use_filter = st.sidebar.checkbox("🔍 열별 필터 검색창 표시", value=False)
         
         days_limit = st.sidebar.slider("🚨 임박 기준(일)", 30, 1095, 548)
