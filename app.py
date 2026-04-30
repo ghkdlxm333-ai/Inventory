@@ -7,17 +7,20 @@ from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
 # 1. 페이지 설정
 st.set_page_config(page_title="SCM 통합 재고관리 Pro", layout="wide", page_icon="📦")
 
-# 2. 디자인 커스텀 CSS (필터 아이콘 시인성 확보 및 상시 검색창 제거)
+# 2. 디자인 커스텀 CSS
 st.markdown("""
     <style>
     .ag-floating-filter { display: none !important; }
     .ag-header-cell-label { display: flex !important; align-items: center !important; justify-content: space-between !important; width: 100% !important; }
     .ag-header-cell-menu-button { opacity: 1 !important; display: inline-block !important; visibility: visible !important; color: #0984e3 !important; }
     
-    /* 탭 내부 슬라이더 박스 디자인 */
-    .setting-box {
-        background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 15px;
-        border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #ff4d4f;
+    /* 탭 내부 설정 박스 디자인 (image_0dc6e6.png 참조 스타일) */
+    .exp-setting-container {
+        background-color: #f1f3f9;
+        padding: 20px;
+        border-radius: 15px;
+        margin-bottom: 20px;
+        border-left: 5px solid #ff4d4f;
     }
     
     .metric-container { background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 12px; text-align: center; }
@@ -26,7 +29,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 3. 데이터 로드 및 전처리
-@st.cache_data
+@st.cache_data(show_spinner="데이터 분석 중...")
 def load_and_validate_data(file):
     try:
         df_temp = pd.read_excel(file, engine='openpyxl', nrows=15)
@@ -48,16 +51,16 @@ def load_and_validate_data(file):
         
         today = datetime.now()
         master_df['잔여일수'] = (master_df['유효일자_dt'] - today).dt.days.fillna(0).astype(int)
+        # 비율 계산 (기준: 3년=1095일)
         master_df['잔여비율(%)'] = (master_df['잔여일수'] / 1095 * 100).clip(0, 100).fillna(0).astype(int)
         
         return master_df.sort_values(by='유효일자_dt')
     except Exception as e: return f"오류: {e}"
 
-# 4. AgGrid 렌더링 함수 (Enterprise 사이드바 제거로 충돌 방지)
+# 4. AgGrid 렌더링 함수
 def render_styled_aggrid(data, threshold, tab_type):
     gb = GridOptionsBuilder.from_dataframe(data)
     
-    # [필터 고정] 아이콘 클릭 시 즉시 필터 팝업
     gb.configure_default_column(
         resizable=True, sortable=True, filterable=True, 
         floatingFilter=False, 
@@ -65,7 +68,7 @@ def render_styled_aggrid(data, threshold, tab_type):
         suppressMenu=False
     )
 
-    # 잔여비율 프로그레스 바 (JsCode)
+    # 잔여비율 프로그레스 바 (JsCode 개선)
     percent_renderer = JsCode("""
     class PercentBarRenderer {
         init(params) {
@@ -73,9 +76,9 @@ def render_styled_aggrid(data, threshold, tab_type):
             let val = params.value;
             let color = val <= 20 ? '#ff4d4f' : (val <= 50 ? '#ffa940' : '#40a9ff');
             this.eGui.innerHTML = `
-                <div style="width:100%; background-color:#f0f0f0; border-radius:12px; height:18px; position:relative; overflow:hidden; border:0.5px solid #d9d9d9; margin-top:6px;">
-                    <div style="width:${val}%; background-color:${color}; height:100%;"></div>
-                    <span style="position:absolute; width:100%; text-align:center; top:0; left:0; font-size:11px; font-weight:800; color:#262626; line-height:18px;">${val}%</span>
+                <div style="width:100%; background-color:#e0e0e0; border-radius:10px; height:18px; position:relative; overflow:hidden; margin-top:6px;">
+                    <div style="width:${val}%; background-color:${color}; height:100%; transition: width 0.5s ease-in-out;"></div>
+                    <span style="position:absolute; width:100%; text-align:center; top:0; left:0; font-size:11px; font-weight:800; color:#222; line-height:18px;">${val}%</span>
                 </div>`;
         }
         getGui() { return this.eGui; }
@@ -87,7 +90,7 @@ def render_styled_aggrid(data, threshold, tab_type):
         active = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '가용재고']
     elif tab_type == "bad":
         active = ['상품코드', '상품명', '웰로스코드', '화주LOT', '유효일자', '불량재고']
-    else: # exp (임박재고 전용 설정)
+    else: # exp (임박재고)
         active = ['상품코드', '상품명', '화주LOT', '유효일자', '가용재고', '잔여일수', '잔여비율(%)']
         gb.configure_column("잔여비율(%)", cellRenderer=percent_renderer, minWidth=150)
 
@@ -97,17 +100,15 @@ def render_styled_aggrid(data, threshold, tab_type):
         else:
             gb.configure_column(col, hide=True)
 
-    # 유효일자 색상 강조
     gb.configure_column("유효일자", cellStyle=JsCode(
         f"function(params) {{ return params.data.잔여일수 <= {threshold} ? {{'color': '#d63031', 'fontWeight': 'bold'}} : null; }}"
     ))
 
-    # [중요] Enterprise 사이드바를 제거하여 필터 아이콘과의 충돌을 원천 차단
     gb.configure_grid_options(
         enableRangeSelection=True,
         statusBar={"statusPanels": [{"statusPanel": "agAggregationComponent", "align": "right"}]},
         localeText={'filterOoo': '검색...', 'applyFilter': '적용', 'resetFilter': '초기화'},
-        suppressMenuHide=True # 아이콘 상시 노출
+        suppressMenuHide=True
     )
 
     return AgGrid(data, gridOptions=gb.build(), height=500, theme='alpine', allow_unsafe_jscode=True, enable_enterprise_modules=True)
@@ -121,10 +122,10 @@ if uploaded_file:
     if isinstance(master_df, pd.DataFrame):
         # 상단 요약 지표
         c1, c2, c3 = st.columns(3)
-        with c1: st.markdown(f'<div class="metric-container">✅ 가용재고<div class="metric-value">{master_df["가용재고"].sum():,}</div></div>', unsafe_allow_html=True)
-        with c2: st.markdown(f'<div class="metric-container">⚠️ 불량재고<div class="metric-value">{master_df["불량재고"].sum():,}</div></div>', unsafe_allow_html=True)
+        with c1: st.markdown(f'<div class="metric-container">✅ 전체 가용재고<div class="metric-value">{master_df["가용재고"].sum():,}</div></div>', unsafe_allow_html=True)
+        with c2: st.markdown(f'<div class="metric-container">⚠️ 전체 불량재고<div class="metric-value">{master_df["불량재고"].sum():,}</div></div>', unsafe_allow_html=True)
         
-        # 탭 구성
+        # 탭 출력
         tab1, tab2, tab3 = st.tabs(["✅ 가용재고", "⚠️ 불량재고", "🚨 임박재고"])
         
         with tab1:
@@ -134,21 +135,26 @@ if uploaded_file:
             render_styled_aggrid(master_df[master_df['불량재고']>0], 548, "bad")
             
         with tab3:
-            # --- 임박재고 탭 안에서만 보이는 설정창 (image_0dc6e6.png 디자인) ---
-            st.markdown('<div class="setting-box">', unsafe_allow_html=True)
-            st.subheader("⚙️ 임박재고 관리 설정")
-            col_s1, col_s2 = st.columns([2, 1])
-            with col_s1:
-                days_limit = st.slider("🚨 임박 기준일 설정", 30, 1095, 548, key="exp_slider")
-            with col_s2:
+            # --- 임박재고 탭 전용 설정창 영역 (image_0dc6e6.png 참조) ---
+            st.markdown('<div class="exp-setting-container">', unsafe_allow_html=True)
+            col_left, col_right = st.columns([3, 1])
+            with col_left:
+                st.markdown("### ⚙️ 임박재고 관리 설정")
+                days_limit = st.slider("🚨 임박 기준(일)을 설정하세요", 30, 1095, 548, key="exp_slider")
+            with col_right:
+                # 잔여 기간 계산 로직
                 y = days_limit // 365
                 m = (days_limit % 365) // 30
-                st.metric("설정 기준", f"약 {y}년 {m}개월")
+                period_text = f"약 {y}년 {m}개월" if y > 0 else f"약 {m}개월"
+                st.metric("설정 기준", period_text)
+                st.caption("설정된 일수 이하의 재고만 표시됩니다.")
             st.markdown('</div>', unsafe_allow_html=True)
             
-            # 슬라이더 값에 따라 실시간 필터링
-            exp_data = master_df[(master_df['가용재고'] > 0) & (master_df['잔여일수'] <= days_limit)]
-            render_styled_aggrid(exp_data, days_limit, "exp")
+            # 실시간 필터링 데이터 생성
+            filtered_exp = master_df[(master_df['가용재고'] > 0) & (master_df['잔여일수'] <= days_limit)]
+            
+            # 그리드 출력
+            render_styled_aggrid(filtered_exp, days_limit, "exp")
 
         # 수주 가용성 분석 섹션
         st.markdown("---")
