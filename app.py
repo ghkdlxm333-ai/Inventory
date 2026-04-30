@@ -181,4 +181,4 @@ if uploaded_file:
                 analysis['부족수량'] = (analysis['수주요청량'] - analysis['현재고']).clip(lower=0).astype(int)
                 analysis['출고판단'] = analysis['부족수량'].apply(lambda x: "✅ 가능" if x == 0 else "❌ 부족")
                 st.table(analysis[['출고판단', '상품코드', '수주요청량', '현재고', '부족수량']])
-            except Exception as e: st.warning(f"분석 오류: {e}") 이 로직 평가 및 분석, 개선사항 있음 말해줘
+            except Exception as e: st.warning(f"분석 오류: {e}") 
